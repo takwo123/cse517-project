@@ -15,7 +15,11 @@ SEQ_LEN = 128
 BATCH_SIZE = 64
 EPOCHS = 3
 LR = 2e-4
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = (
+    'cuda' if torch.cuda.is_available() else 
+    'mps' if torch.backends.mps.is_available() else 
+    'cpu'
+)
 
 class CharDataset(Dataset):
     def __init__(self, text, seq_len, char2idx):
@@ -55,7 +59,7 @@ class MyModel:
 
     @classmethod
     def load_training_data(cls):
-        dataset = load_dataset("wikipedia", "20220301.en", split='train[:1%]')
+        dataset = load_dataset("wikipedia", "20220301.simple", split='train[:1%]', trust_remote_code=True)
         text_data = " ".join(dataset['text']).replace('\n', ' ')
         cls.vocab = sorted(list(set(text_data)))
         cls.char2idx = {ch: i for i, ch in enumerate(cls.vocab)}
