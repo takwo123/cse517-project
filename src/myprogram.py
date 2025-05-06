@@ -1,28 +1,73 @@
-#!/usr/bin/env python
 import os
-import string
 import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+from datasets import load_dataset
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
+EMB_SIZE = 128
+NHEAD = 4
+NUM_LAYERS = 3
+HIDDEN_DIM = 512
+SEQ_LEN = 128
+BATCH_SIZE = 64
+EPOCHS = 3
+LR = 2e-4
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+class CharDataset(Dataset):
+    def __init__(self, text, seq_len, char2idx):
+        self.text = text
+        self.seq_len = seq_len
+        self.char2idx = char2idx
+
+    def __len__(self):
+        return len(self.text) - self.seq_len
+
+    def __getitem__(self, idx):
+        input_seq = self.text[idx:idx+self.seq_len]
+        target_char = self.text[idx+self.seq_len]
+        input_tensor = torch.tensor([self.char2idx[c] for c in input_seq], dtype=torch.long)
+        target_tensor = torch.tensor(self.char2idx[target_char], dtype=torch.long)
+        return input_tensor, target_tensor
+
+class CharTransformer(nn.Module):
+    def __init__(self, vocab_size, emb_size, nhead, num_layers, hidden_dim):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, emb_size)
+        encoder_layers = nn.TransformerEncoderLayer(d_model=emb_size, nhead=nhead, dim_feedforward=hidden_dim)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers)
+        self.fc_out = nn.Linear(emb_size, vocab_size)
+
+    def forward(self, src):
+        embedded = self.embedding(src).permute(1, 0, 2)
+        output = self.transformer_encoder(embedded)
+        logits = self.fc_out(output[-1, :, :])
+        return logits
 
 class MyModel:
-    """
-    This is a starter model to get you started. Feel free to modify this file.
-    """
+    model = None
+    char2idx = None
+    idx2char = None
+    vocab = None
 
     @classmethod
     def load_training_data(cls):
-        # your code here
-        # this particular model doesn't train
-        return []
+        dataset = load_dataset("wikipedia", "20220301.en", split='train[:1%]')
+        text_data = " ".join(dataset['text']).replace('\n', ' ')
+        cls.vocab = sorted(list(set(text_data)))
+        cls.char2idx = {ch: i for i, ch in enumerate(cls.vocab)}
+        cls.idx2char = {i: ch for ch, i in cls.char2idx.items()}
+        return text_data
 
     @classmethod
     def load_test_data(cls, fname):
-        # your code here
         data = []
         with open(fname) as f:
             for line in f:
-                inp = line[:-1]  # the last character is a newline
+                inp = line.rstrip('\n')
                 data.append(inp)
         return data
 
@@ -30,36 +75,64 @@ class MyModel:
     def write_pred(cls, preds, fname):
         with open(fname, 'wt') as f:
             for p in preds:
-                f.write('{}\n'.format(p))
+                f.write(f"{p}\n")
 
     def run_train(self, data, work_dir):
-        # your code here
-        pass
+        dataset = CharDataset(data, SEQ_LEN, self.char2idx)
+        data_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+        self.model = CharTransformer(len(self.char2idx), EMB_SIZE, NHEAD, NUM_LAYERS, HIDDEN_DIM).to(DEVICE)
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.Adam(self.model.parameters(), lr=LR)
+
+        self.model.train()
+        for epoch in range(EPOCHS):
+            total_loss = 0
+            for batch_idx, (input_seq, target) in enumerate(data_loader):
+                input_seq, target = input_seq.to(DEVICE), target.to(DEVICE)
+                optimizer.zero_grad()
+                output = self.model(input_seq)
+                loss = criterion(output, target)
+                loss.backward()
+                optimizer.step()
+                total_loss += loss.item()
+
+                if (batch_idx + 1) % 100 == 0:
+                    print(f"Epoch [{epoch+1}/{EPOCHS}], Step [{batch_idx+1}/{len(data_loader)}], Loss: {total_loss/(batch_idx+1):.4f}")
+
+        torch.save({
+            'model_state_dict': self.model.state_dict(),
+            'char2idx': self.char2idx,
+            'idx2char': self.idx2char
+        }, os.path.join(work_dir, 'model.checkpoint'))
 
     def run_pred(self, data):
-        # your code here
         preds = []
-        all_chars = string.ascii_letters
-        for inp in data:
-            # this model just predicts a random character each time
-            top_guesses = [random.choice(all_chars) for _ in range(3)]
-            preds.append(''.join(top_guesses))
+        self.model.eval()
+        for context in data:
+            context = context[-SEQ_LEN:]
+            context_encoded = torch.tensor([[self.char2idx.get(c, 0) for c in context]], dtype=torch.long).to(DEVICE)
+            with torch.no_grad():
+                logits = self.model(context_encoded)
+                probabilities = torch.softmax(logits, dim=-1)
+                top_probs, top_idxs = probabilities.topk(3)
+                top_chars = [self.idx2char[idx.item()] for idx in top_idxs[0]]
+                preds.append("".join(top_chars))
         return preds
 
     def save(self, work_dir):
-        # your code here
-        # this particular model has nothing to save, but for demonstration purposes we will save a blank file
-        with open(os.path.join(work_dir, 'model.checkpoint'), 'wt') as f:
-            f.write('dummy save')
+        pass  # Already saved in run_train
 
     @classmethod
     def load(cls, work_dir):
-        # your code here
-        # this particular model has nothing to load, but for demonstration purposes we will load a blank file
-        with open(os.path.join(work_dir, 'model.checkpoint')) as f:
-            dummy_save = f.read()
-        return MyModel()
-
+        checkpoint = torch.load(os.path.join(work_dir, 'model.checkpoint'), map_location=DEVICE)
+        model = MyModel()
+        model.char2idx = checkpoint['char2idx']
+        model.idx2char = checkpoint['idx2char']
+        model.vocab = sorted(model.char2idx.keys())
+        model.model = CharTransformer(len(model.char2idx), EMB_SIZE, NHEAD, NUM_LAYERS, HIDDEN_DIM).to(DEVICE)
+        model.model.load_state_dict(checkpoint['model_state_dict'])
+        model.model.eval()
+        return model
 
 if __name__ == '__main__':
     parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
@@ -73,9 +146,9 @@ if __name__ == '__main__':
 
     if args.mode == 'train':
         if not os.path.isdir(args.work_dir):
-            print('Making working directory {}'.format(args.work_dir))
+            print(f'Making working directory {args.work_dir}')
             os.makedirs(args.work_dir)
-        print('Instatiating model')
+        print('Instantiating model')
         model = MyModel()
         print('Loading training data')
         train_data = MyModel.load_training_data()
@@ -86,12 +159,12 @@ if __name__ == '__main__':
     elif args.mode == 'test':
         print('Loading model')
         model = MyModel.load(args.work_dir)
-        print('Loading test data from {}'.format(args.test_data))
+        print(f'Loading test data from {args.test_data}')
         test_data = MyModel.load_test_data(args.test_data)
         print('Making predictions')
         pred = model.run_pred(test_data)
-        print('Writing predictions to {}'.format(args.test_output))
-        assert len(pred) == len(test_data), 'Expected {} predictions but got {}'.format(len(test_data), len(pred))
+        print(f'Writing predictions to {args.test_output}')
+        assert len(pred) == len(test_data), f'Expected {len(test_data)} predictions but got {len(pred)}'
         model.write_pred(pred, args.test_output)
     else:
-        raise NotImplementedError('Unknown mode {}'.format(args.mode))
+        raise NotImplementedError(f'Unknown mode {args.mode}')
