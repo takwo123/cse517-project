@@ -3,8 +3,9 @@ import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import pandas as pd
+
 from torch.utils.data import DataLoader, Dataset
-from datasets import load_dataset
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 EMB_SIZE = 128
@@ -59,8 +60,11 @@ class MyModel:
 
     @classmethod
     def load_training_data(cls):
-        dataset = load_dataset("wikipedia", "20220301.simple", split='train[:1%]', trust_remote_code=True)
-        text_data = " ".join(dataset['text']).replace('\n', ' ')
+        df = pd.read_csv("/Users/thangakumar/01/Technical/PMP/NPL/cse517-project/src/data/kaggle_english_dataset.csv")  # Assumes file is in current directory
+        if "text" not in df.columns:
+            raise ValueError("Expected column 'text' not found in kaggle_english_dataset.csv")
+        
+        text_data = " ".join(str(t) for t in df["text"].dropna()).replace("\n", " ")
         cls.vocab = sorted(list(set(text_data)))
         cls.char2idx = {ch: i for i, ch in enumerate(cls.vocab)}
         cls.idx2char = {i: ch for ch, i in cls.char2idx.items()}
