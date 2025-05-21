@@ -39,17 +39,25 @@ class CharDataset(Dataset):
         return input_tensor, target_tensor
 
 class CharTransformer(nn.Module):
-    def __init__(self, vocab_size, emb_size, nhead, num_layers, hidden_dim):
+    def __init__(self, vocab_size, emb_size, nhead, num_layers, hidden_dim, max_len=SEQ_LEN, dropout=0.1):
         super().__init__()
-        self.embedding = nn.Embedding(vocab_size, emb_size)
-        encoder_layers = nn.TransformerEncoderLayer(d_model=emb_size, nhead=nhead, dim_feedforward=hidden_dim)
+        self.token_embedding = nn.Embedding(vocab_size, emb_size)
+        self.pos_embedding = nn.Embedding(max_len, emb_size)
+        self.layer_norm = nn.LayerNorm(emb_size)
+        self.dropout = nn.Dropout(dropout)
+
+        encoder_layers = nn.TransformerEncoderLayer(d_model=emb_size, nhead=nhead, dim_feedforward=hidden_dim, dropout=dropout)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers)
         self.fc_out = nn.Linear(emb_size, vocab_size)
 
     def forward(self, src):
-        embedded = self.embedding(src).permute(1, 0, 2)
+        positions = torch.arange(0, src.size(1), device=src.device).unsqueeze(0)
+        embedded = self.token_embedding(src) + self.pos_embedding(positions)
+        embedded = self.layer_norm(embedded)
+        embedded = self.dropout(embedded).permute(1, 0, 2)  # [seq_len, batch_size, emb_size]
+        
         output = self.transformer_encoder(embedded)
-        logits = self.fc_out(output[-1, :, :])
+        logits = self.fc_out(output[-1])  # Take the output at the last time step
         return logits
 
 class MyModel:
@@ -88,7 +96,18 @@ class MyModel:
     def run_train(self, data, work_dir):
         dataset = CharDataset(data, SEQ_LEN, self.char2idx)
         data_loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
-        self.model = CharTransformer(len(self.char2idx), EMB_SIZE, NHEAD, NUM_LAYERS, HIDDEN_DIM).to(DEVICE)
+        
+        # Use updated CharTransformer with positional embeddings
+        self.model = CharTransformer(
+            vocab_size=len(self.char2idx),
+            emb_size=EMB_SIZE,
+            nhead=NHEAD,
+            num_layers=NUM_LAYERS,
+            hidden_dim=HIDDEN_DIM,
+            max_len=SEQ_LEN,
+            dropout=0.1
+        ).to(DEVICE)
+
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(self.model.parameters(), lr=LR)
 
@@ -105,7 +124,7 @@ class MyModel:
                 total_loss += loss.item()
 
                 if (batch_idx + 1) % 100 == 0:
-                    print(f"Epoch [{epoch+1}/{EPOCHS}], Step [{batch_idx+1}/{len(data_loader)}], Loss: {total_loss/(batch_idx+1):.4f}")
+                    print(f"Epoch [{epoch+1}/{EPOCHS}], Step [{batch_idx+1}/{len(data_loader)}], Loss: {total_loss / (batch_idx + 1):.4f}")
 
         torch.save({
             'model_state_dict': self.model.state_dict(),
