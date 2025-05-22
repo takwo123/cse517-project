@@ -10,13 +10,13 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 # Hyperparameters
 EMB_SIZE = 128
 NHEAD = 4
-NUM_LAYERS = 3
-HIDDEN_DIM = 512
-SEQ_LEN = 128
+NUM_LAYERS = 2
+HIDDEN_DIM = 256
+SEQ_LEN = 64
 BATCH_SIZE = 64
 EPOCHS = 5
 LR = 2e-4
-SAMPLE_FRACTION = 0.33  # Use 33% of dataset each epoch
+SAMPLE_FRACTION = 0.30  # Use 33% of dataset each epoch
 
 DEVICE = (
     'cuda' if torch.cuda.is_available() else
@@ -25,7 +25,7 @@ DEVICE = (
 )
 
 # Enforce CUDA
-assert DEVICE == 'cuda', "❌ CUDA not available — training will be slow. Aborting."
+# assert DEVICE == 'cuda', "❌ CUDA not available — training will be slow. Aborting."
 print(f"✅ Using device: {DEVICE}")
 
 
@@ -45,11 +45,12 @@ class CharDataset(Dataset):
         target_tensor = torch.tensor(self.char2idx[target_char], dtype=torch.long)
         return input_tensor, target_tensor
 
-
 class CharTransformer(nn.Module):
-    def __init__(self, vocab_size, emb_size, nhead, num_layers, hidden_dim):
+    def __init__(self, vocab_size, emb_size, nhead, num_layers, hidden_dim, max_len=SEQ_LEN):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, emb_size)
+        self.pos_embedding = nn.Embedding(max_len, emb_size)
+
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=emb_size,
             nhead=nhead,
@@ -60,11 +61,12 @@ class CharTransformer(nn.Module):
         self.fc_out = nn.Linear(emb_size, vocab_size)
 
     def forward(self, src):
-        embedded = self.embedding(src)
+        batch_size, seq_len = src.size()
+        pos = torch.arange(0, seq_len, device=src.device).unsqueeze(0).expand(batch_size, seq_len)
+        embedded = self.embedding(src) + self.pos_embedding(pos)
         output = self.transformer_encoder(embedded)
         logits = self.fc_out(output[:, -1, :])
         return logits
-
 
 class MyModel:
     model = None
