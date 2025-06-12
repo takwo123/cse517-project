@@ -20,6 +20,14 @@ cp Dockerfile submit/Dockerfile
 # submit source code
 cp -r src submit/src
 
+cp -r example submit/example
+
+cp requirements.txt submit/requirements.txt
+
+cp -r example submit/example
+
+cp -r grader submit/grader
+
 # submit checkpoints
 cp -r work submit/work
 
